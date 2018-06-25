@@ -1,0 +1,83 @@
+name: BoomiCustomJMXMetrics
+version: 1.0
+enabled: true
+
+jmx:
+  - object_name: com.boomi.container.services:type=Config
+    metrics:
+      - attributes: ContainerAccountCount
+        type: simple
+
+  - object_name: com.boomi.container.services:type=ConnectorManager
+    metrics:
+      - attributes: RunningBrowsersCount, LocalRunningBrowsersCount
+        type: simple
+
+  - object_name: com.boomi.container.services:type=ExecutionManager
+    metrics:
+      - attributes: LocalExecutionCount, RunningExecutionCount, RunningExecutionEstimatedCount, AverageExecutionTime, QueuedExecutionCount, QueuedExecutionEstimatedCount, AverageExecutionQueueTime, MaxQueuedExecutions, MaxRunningExecutions, QueuedExecutionTimeout
+        type: simple
+      - attributes: Stats.localExecutionCount, ExecutionQueueStats.taskCount
+        type: monotonically_increasing
+
+  - object_name: com.boomi.container.services:type=MessagePollerThread
+    metrics:
+      - attributes: DownloadStats.connectFailureCount, DownloadStats.deliveredMessageCount
+        type: monotonically_increasing
+
+  - object_name: com.boomi.container.services:queueId=acknowledgement-track,type=MessageQueue
+    metrics:
+      - attributes: PendingStoreMessageCount, PendingUploadMessageCount
+        type: simple
+      - attributes: UploadStats.connectFailureCount, UploadStats.deliveredMessageCount
+        type: monotonically_increasing
+
+  - object_name: com.boomi.container.services:queueId=auditlog,type=MessageQueue
+    metrics:
+      - attributes: PendingStoreMessageCount, PendingUploadMessageCount
+        type: simple
+      - attributes: UploadStats.connectFailureCount, UploadStats.deliveredMessageCount
+        type: monotonically_increasing
+
+  - object_name: com.boomi.container.services:queueId=event,type=MessageQueue
+    metrics:
+      - attributes: PendingStoreMessageCount, PendingUploadMessageCount
+        type: simple
+      - attributes: UploadStats.connectFailureCount, UploadStats.deliveredMessageCount
+        type: monotonically_increasing
+
+  - object_name: com.boomi.container.services:queueId=process-track,type=MessageQueue
+    metrics:
+      - attributes: PendingStoreMessageCount, PendingUploadMessageCount
+        type: simple
+      - attributes: UploadStats.connectFailureCount, UploadStats.deliveredMessageCount
+        type: monotonically_increasing
+
+  - object_name: com.boomi.container.services:queueId=testmessage,type=MessageQueue
+    metrics:
+      - attributes: PendingStoreMessageCount, PendingUploadMessageCount
+        type: simple
+      - attributes: UploadStats.connectFailureCount, UploadStats.deliveredMessageCount
+        type: monotonically_increasing
+
+  - object_name: com.boomi.container.services:type=MultiProcessExecutionForker
+    metrics:
+      - attributes: LocalDirectExecutionCount, LocalRunningWorkersCount, RunningWorkersCount
+        type: simple
+      - attributes: LocalTotalDirectExecutionCount
+        type: monotonically_increasing
+
+  - object_name: com.boomi.container.services:type=Scheduler
+    metrics:
+      - attributes: ScheduleCount
+        type: simple
+
+  - object_name: com.boomi.container.services:cluster="ATOM_CLUSTER",type=channel
+    metrics:
+      - attributes: sent_messages, sent_bytes, received_messages, received_bytes
+        type: monotonically_increasing
+
+  - object_name: com.boomi.jetty:id=0,type=queuedthreadpool
+    metrics:
+      - attributes: threads, queueSize
+        type: simple
