@@ -1,0 +1,469 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation Template for deploying an autoscaling group for Boomi servers.
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Boomi Application configuration
+        Parameters:
+          - BoomiName
+          - BoomiType
+          - BoomiInstallToken
+          - HealthCheckType
+      - Label:
+          default: Network Configuration
+        Parameters:
+          - VPC
+          - BoomiSubnets
+          - ALBTargetGroupArn
+      - Label:
+          default: Instance Configuration
+        Parameters:
+          - BoomiInstanceType
+          - BoomiServerVolumeSize
+          - MinAmountInstances
+          - MaxAmountInstances
+          - DesiredAmountInstances
+      - Label:
+          default: EFS Configuration
+        Parameters:
+          - EFSId
+          - EFSSecurityGroup
+      - Label:
+          default: Security Configuration
+        Parameters:
+          - SubnetFrom
+          - SSHFrom
+          - SSHKey
+      - Label:
+          default: Monitoring
+        Parameters:
+          - NewrelicLicenceKey
+          - NewrelicApplicationName
+Parameters:
+  BoomiName:
+    Description: Boomi name
+    Type: String
+    AllowedPattern: '[a-zA-Z0-9_]*'
+  BoomiType:
+    Description: Specifies the type of the Boomi installation (Cloud (default) or Molecule)
+    Type: String
+    Default: Cloud
+    AllowedValues: ['Cloud', 'Molecule']
+  BoomiInstallToken:
+    Description: This token is required to setup the Boomi (Cloud) Molecule and associate
+      it with the corresponding Cloud. Dell Boomi will not be installed without it
+    Type: String
+  VPC:
+    Description: Which VPC would you like to launch the Boomi servers into
+    Type: AWS::EC2::VPC::Id
+  BoomiSubnets:
+    Description: Which subnets would you like to launch the Boomi servers into
+    Type: List<AWS::EC2::Subnet::Id>
+  ALBTargetGroupArn:
+    Description: The ARN of the Boomi TargetGroup of the ALB
+    Type: String
+  EFSId:
+    Description: The Id of the EFS filesystem
+    Type: String
+  BoomiServerVolumeSize:
+    Description: The size of the EBS volume to attached into Boomi server
+    Type: Number
+    Default: '10'
+  BoomiInstanceType:
+    Default: m4.large
+    Description: Boomi server instance type
+    Type: String
+  SubnetFrom:
+    Description: The CIDR range that has access to mount folders from the Boomi server
+    Default: 10.0.0.0/8
+    Type: String
+    MinLength: '5'
+    MaxLength: '18'
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(\/(\d|[1-2]\d|3[0-2]))
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/xx
+  SSHFrom:
+    Description: The CIDR range that has access to SSH to the Boomi server
+    Default: 10.0.0.0/8
+    Type: String
+    MinLength: '5'
+    MaxLength: '18'
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(\/(\d|[1-2]\d|3[0-2]))
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/xx
+  EFSSecurityGroup:
+    Description: The Id of the EFS security group
+    Type: AWS::EC2::SecurityGroup::Id
+  SSHKey:
+    Description: Key file used to SSH into servers
+    Type: AWS::EC2::KeyPair::KeyName
+  MinAmountInstances:
+    Description: The minimum amount of EC2 instances
+    Type: Number
+    Default: '2'
+  DesiredAmountInstances:
+    Description: The desired amount of EC2 instances
+    Type: Number
+    Default: '2'
+  MaxAmountInstances:
+    Description: The maximum amount of EC2 instances
+    Type: Number
+    Default: '2'
+  HealthCheckType:
+    Description: Set the healthcheck type for the autoscaling group (Default = EC2). If ELB, please ensure that a Boomi WSS service is deployed to the environment.
+    Type: String
+    Default: EC2
+    AllowedValues: ['ELB', 'EC2']
+  NewrelicLicenceKey:
+    Description: This is the NewRelic licence key (Optional)
+    Type: String
+    Default: ""
+  NewrelicApplicationName:
+    Description: This is the NewRelic Application name (Optional - if not set it is equal to the value for BoomiName )
+    Type: String
+    Default: ""
+
+Conditions:
+  NoNewrelicApplicationName: !Equals
+    - !Ref 'NewrelicApplicationName'
+    - ''
+
+Mappings:
+  Region2Ami:
+    us-east-1:
+      hvm: ami-14c5486b
+    us-east-2:
+      hvm: ami-922914f7
+    us-west-1:
+      hvm: ami-25110f45
+    us-west-2:
+      hvm: ami-e251209a
+    ap-northeast-1:
+      hvm: ami-92df37ed
+    ap-northeast-2:
+      hvm: ami-c10fa6af
+    ap-south-1:
+      hvm: ami-76d6f519
+    ap-southeast-1:
+      hvm: ami-de90a5a2
+    ap-southeast-2:
+      hvm: ami-423bec20
+    ca-central-1:
+      hvm: ami-338a0a57
+    eu-central-1:
+      hvm: ami-9a91b371
+    eu-west-1:
+      hvm: ami-ca0135b3
+    eu-west-2:
+      hvm: ami-a36f8dc4
+    eu-west-3:
+      hvm: ami-969c2deb
+    sa-east-1:
+      hvm: ami-3885d854
+Resources:
+  BoomiSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable internal access to the boomi server
+      VpcId: !Ref 'VPC'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '0'
+          ToPort: '65535'
+          CidrIp: !Ref 'SubnetFrom'
+        - IpProtocol: udp
+          FromPort: '0'
+          ToPort: '65535'
+          CidrIp: !Ref 'SubnetFrom'
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref 'SSHFrom'
+  BoomiServerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: BoomiServerPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - elasticfilesystem:DescribeMountTargets
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - autoscaling:SetInstanceHealth
+                Resource: '*'
+                Condition:
+                  StringLike:
+                      'autoscaling:ResourceTag/SelfManaged': 'true'
+        - PolicyName: BoomiSharedResources
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:GetObject"
+                Resource:
+                  - "arn:aws:s3:::igshared-resources/*"
+  BoomiServerRoleInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref 'BoomiServerRole'
+  BoomiServersLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          InstallConfigureRun:
+            - InstallConfigure
+            - Run
+        InstallConfigure:
+          packages:
+            yum:
+              nfs-utils: []
+              wget: []
+          files:
+            # JVM
+            /tmp/installJDK.sh:
+              source: "https://raw.githubusercontent.com/andrewburnet/boomi-dev/master/resources/installJDK.sh"
+              mode: '000744'
+              owner: root
+              group: root
+
+            # CloudFormation configs
+            /etc/cfn/cfn-hup.conf:
+              content: !Sub |
+                [main]
+                stack=${AWS::StackId}
+                region=${AWS::Region}
+              mode: '000400'
+              owner: root
+              group: root
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.BoomiServersLaunchConfiguration.Metadata.AWS::CloudFormation::Init
+                action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource BoomiServersLaunchConfiguration --configsets InstallConfigureRun --region ${AWS::Region}
+                runas=root
+          commands:
+            01_make_mount_dir:
+              command: mkdir -p /mnt/data
+              test: test ! -d /mnt/data
+            02_make_usr_boomi_work_dir:
+              command: mkdir -p /usr/local/boomi/work
+              test: test ! -d /usr/local/boomi/work
+            03_make_usr_boomi_molecule_dir:
+              command: mkdir -p /usr/local/boomi/molecule
+              test: test ! -d /usr/local/boomi/molecule
+            04_download_and_install_jdk8:
+              command: ./tmp/installJDK.sh
+              test: '! java -version 2>&1 | grep "1.8"'
+            05_set_hostname:
+              command: !Sub |
+                LOCAL_IP_UNDERSCORE=$(curl --silent http://169.254.169.254/latest/meta-data/local-ipv4 | tr "." "_") &&\
+                sed -i "s/HOSTNAME=.*/HOSTNAME=${BoomiName}-$LOCAL_IP_UNDERSCORE/g" /etc/sysconfig/network &&\
+                sed -i -E "s/(127\.0\.0\.1) (.*)/\1 ${BoomiName}-$LOCAL_IP_UNDERSCORE \2/g" /etc/hosts &&\
+                hostname  "${BoomiName}-$LOCAL_IP_UNDERSCORE" &&\
+                service network restart
+              test: !Sub '! grep ${BoomiName} /etc/sysconfig/network'
+            06_create_boomi_user_and_group:
+              command: useradd --system -s /bin/false --create-home  --user-group boomi
+              test: '! grep boomi /etc/passwd'
+          services:
+            sysvinit:
+              cfn-hup:
+                enabled: 'true'
+                ensureRunning: 'true'
+                files:
+                  - /etc/cfn/cfn-hup.conf
+                  - /etc/cfn/hooks.d/cfn-auto-reloader.conf
+        Run:
+          files:
+            # NewRelic
+            /usr/local/boomi/newrelic/extensions/newrelic_boomi_jmx_extension.yml:
+              source: "https://raw.githubusercontent.com/andrewburnet/boomi-dev/master/resources/newrelic_boomi_jmx_extension.yml"
+              mode: '000744'
+              owner: boomi
+              group: boomi
+
+            /tmp/installNewrelicInfrastructureAgent.sh:
+              source: "https://raw.githubusercontent.com/andrewburnet/boomi-dev/master/resources/installNewrelicInfrastructureAgent.sh"
+              mode: '000744'
+              owner: root
+              group: root
+              context:
+                NewrelicLicenceKey: !Ref NewrelicLicenceKey
+                BoomiName: !Ref BoomiName
+                BoomiType: !Ref BoomiType
+
+            /tmp/installNewrelicJVMAgent.sh:
+              source: "https://raw.githubusercontent.com/andrewburnet/boomi-dev/master/resources/installNewrelicJVMAgent.sh"
+              mode: '000744'
+              owner: boomi
+              group: boomi
+              context:
+                NewrelicLicenceKey: !Ref NewrelicLicenceKey
+                APPNAME: !If [NoNewrelicApplicationName, !Ref 'BoomiName', !Ref 'NewrelicApplicationName']
+                BoomiName: !Ref BoomiName
+                BoomiType: !Ref BoomiType
+
+            # Boomi
+            /tmp/installBoomi.sh:
+              source: "https://raw.githubusercontent.com/andrewburnet/boomi-dev/master/resources/installBoomi.sh"
+              mode: '000744'
+              owner: boomi
+              group: boomi
+              context:
+                BoomiName: !Ref BoomiName
+                BoomiType: !Ref BoomiType
+                BoomiInstallToken: !Ref BoomiInstallToken
+
+            /etc/init.d/boomi-atom:
+              content: !Sub |
+                #!/bin/sh
+                # chkconfig:         2345 75 15
+                # description:       boomi-atom
+                ### BEGIN INIT INFO
+                # Provides:          boomi-atom
+                # Required-Start:    $all
+                # Required-Stop:     $all
+                # Default-Start:     2 3 4 5
+                # Default-Stop:      0 1 6
+                # Short-Description: ${BoomiType}
+                ### END INIT INFO
+                sudo -u boomi -- /mnt/data/${BoomiType}_${BoomiName}/bin/atom $1
+                exit $?
+              mode: '000755'
+              owner: root
+              group: root
+
+            # Boomi Watchdog
+            /usr/local/bin/boomi-watchdog.py:
+              source: "https://raw.githubusercontent.com/andrewburnet/boomi-dev/master/resources/boomi_watchdog.py"
+              mode: '000755'
+              owner: root
+              group: root
+              context:
+                REGION: !Ref "AWS::Region"
+                BoomiName: !Ref BoomiName
+                BoomiType: !Ref BoomiType
+
+          commands:
+            00_fetch_mounttarget_ip:
+              command: !Sub
+                - echo $(curl --silent http://169.254.169.254/latest/meta-data/network/interfaces/macs/$(curl --silent http://169.254.169.254/latest/meta-data/network/interfaces/macs/ | head -n 1)/subnet-id) > /tmp/SUBNET_ID && aws efs describe-mount-targets --file-system-id ${EFSID} --region ${AWS::Region} --query "MountTargets[?SubnetId==\`$(cat /tmp/SUBNET_ID)\`].IpAddress" --output text > /tmp/EFS_MOUNTTARGET_IP
+                - EFSID: !Ref 'EFSId'
+            01_mount_nfs_filesystem:
+              command: export EFS_MOUNTTARGET_IP=$(cat /tmp/EFS_MOUNTTARGET_IP) && mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,async ${EFS_MOUNTTARGET_IP}:/ /mnt/data
+              test: grep -qs "/mnt/data" /proc/mounts; [ $? -ne 0 ]
+            02_add_config_to_fstab:
+              command: export EFS_MOUNTTARGET_IP=$(cat /tmp/EFS_MOUNTTARGET_IP) &&
+                echo "${EFS_MOUNTTARGET_IP}:/ /mnt/data nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,async
+                0 0" >> /etc/fstab
+              test: grep -qs "/mnt/data" /etc/fstab; [ $? -ne 0 ]
+            03_chown_to_boomi:
+              command: chown -R boomi:boomi /mnt/data/ && chown -R boomi:boomi /usr/local/boomi/ && sudo -u boomi ln -s /mnt/data /usr/local/boomi/molecule/ && sudo chmod -R 777 /tmp
+              test: '! stat -c "%U" /usr/local/boomi/molecule | grep boomi'
+            04_download_install_boomi:
+              command: sudo -u boomi ./tmp/installBoomi.sh
+              test: !Sub |
+                test ! -d /mnt/data/${BoomiType}_${BoomiName} &&\
+                python -c 'import random; from time import sleep; sleep( random.uniform(0, 5) )' &&\
+                test ! -f /mnt/data/BOOMI_${BoomiName}_INPROGRESS
+            05_wait_for_finishing_boomi_install:
+              command: !Sub |
+                while [ -f /mnt/data/BOOMI_${BoomiName}_INPROGRESS ]; do sleep 5; echo 'Boomi installation is still in progress';  done;
+              test: !Sub |
+                test -f /mnt/data/BOOMI_${BoomiName}_INPROGRESS
+            06_give_head_node_time_to_start:
+              command: sleep 120
+              test: !Sub |
+                [ "$(cat /mnt/data/BOOMI_${BoomiName}_HEAD_NODE_IP)" != "$(curl --silent http://169.254.169.254/latest/meta-data/local-ipv4)" ] \
+                  && test -f /mnt/data/BOOMI_${BoomiName}_STARTED_AT && let STARTAT_DIFF=$(date +%s)-$(cat /mnt/data/BOOMI_${BoomiName}_STARTED_AT) \
+                  && [ $STARTAT_DIFF -lt 180 ]
+            07_install_newrelic_infrastructure_agent:
+              command: sudo ./tmp/installNewrelicInfrastructureAgent.sh
+              test: !Sub |
+                test ! -f /etc/newrelic-infra.yml && [ '' != '${NewrelicLicenceKey}' ]
+            08_install_newrelic_java_agent:
+              command: sudo -u boomi ./tmp/installNewrelicJVMAgent.sh
+              test: test ! -f /usr/local/boomi/newrelic/newrelic.yml && [ '' != '${NewrelicLicenceKey}' ]
+            99_set_watchdog_cron:
+              command: mkdir -p /var/spool/cron && echo "*/5 * * * * sudo python /usr/local/bin/boomi-watchdog.py" >> /var/spool/cron/root
+              test: grep -qs "boomi-watchdog.py" /var/spool/cron/root; [ $? -ne 0 ]
+          services:
+            sysvinit:
+              boomi-atom:
+                enabled: 'true'
+                ensureRunning: 'true'
+    Properties:
+      InstanceType: !Ref 'BoomiInstanceType'
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: !Ref 'BoomiServerVolumeSize'
+            VolumeType: gp2
+      KeyName: !Ref 'SSHKey'
+      ImageId: !FindInMap
+        - Region2Ami
+        - !Ref 'AWS::Region'
+        - hvm
+      SecurityGroups:
+        - !Ref 'BoomiSecurityGroup'
+        - !Ref 'EFSSecurityGroup'
+      UserData: !Base64
+        Fn::Sub: |
+          #!/bin/bash -x
+          yum update -y
+          yum upgrade -y
+          yum install aws-cfn-bootstrap -y
+          # Install the files and packages from the metadata
+          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource BoomiServersLaunchConfiguration --region ${AWS::Region} --configsets InstallConfigureRun
+          # Signal the status from cfn-init
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource BoomiServersASG --region ${AWS::Region}
+      IamInstanceProfile: !Ref 'BoomiServerRoleInstanceProfile'
+
+  BoomiServersASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchConfigurationName: !Ref 'BoomiServersLaunchConfiguration'
+      MinSize: !Ref 'MinAmountInstances'
+      MaxSize: !Ref 'MaxAmountInstances'
+      DesiredCapacity: !Ref 'DesiredAmountInstances'
+      HealthCheckGracePeriod: '600'
+      HealthCheckType: !Ref 'HealthCheckType'
+      TargetGroupARNs:
+        - !Ref 'ALBTargetGroupArn'
+      VPCZoneIdentifier: !Ref 'BoomiSubnets'
+      Tags:
+          -
+            Key: "SelfManaged"
+            Value: "true"
+            PropagateAtLaunch: "true"
+          - Key: "Name"
+            Value: !Sub "${BoomiName}_NODE"
+            PropagateAtLaunch: "true"
+          - Key: "InsightVM"
+            Value: "True"
+            PropagateAtLaunch: "true"
+    CreationPolicy:
+      ResourceSignal:
+        Count: !Ref 'MinAmountInstances'
+        Timeout: PT15M
+    UpdatePolicy:
+      AutoScalingReplacingUpdate:
+        WillReplace: 'true'

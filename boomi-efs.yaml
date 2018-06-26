@@ -1,0 +1,80 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation Template for deploying an EFS for Boomi
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Network Configuration
+        Parameters:
+          - VPC
+          - EFSMountpointSubnets
+      - Label:
+          default: EFS Configuration
+        Parameters:
+          - PerformanceMode
+Parameters:
+  VPC:
+    Description: Which VPC would you like to launch the EFS
+    Type: AWS::EC2::VPC::Id
+  EFSMountpointSubnets:
+    Description: Which subnets would you like to add EFS mount points into
+    Type: List<AWS::EC2::Subnet::Id>
+  PerformanceMode:
+    Type: String
+    Description: 'This parameter specifies the performance mode of EFS (default: generalPurpose)'
+    Default: generalPurpose
+    AllowedValues:
+      - maxIO
+      - generalPurpose
+Resources:
+  EFSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG for EFS - allows NFS inbound traffic only
+      VpcId: !Ref 'VPC'
+  InboundTCP2049:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      IpProtocol: tcp
+      FromPort: '2049'
+      ToPort: '2049'
+      SourceSecurityGroupId: !Ref 'EFSSecurityGroup'
+      GroupId: !Ref 'EFSSecurityGroup'
+  FileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      PerformanceMode: !Ref 'PerformanceMode'
+      FileSystemTags:
+        - Key: Name
+          Value: !Sub 'BoomiEFS-${AWS::StackName}'
+  MountTarget1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref 'FileSystem'
+      SubnetId: !Select
+        - '0'
+        - !Ref 'EFSMountpointSubnets'
+      SecurityGroups:
+        - !Ref 'EFSSecurityGroup'
+  MountTarget2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref 'FileSystem'
+      SubnetId: !Select
+        - '1'
+        - !Ref 'EFSMountpointSubnets'
+      SecurityGroups:
+        - !Ref 'EFSSecurityGroup'
+Outputs:
+  MountTargetIP1:
+    Description: First Mount target IP
+    Value: !Ref 'MountTarget1'
+  MountTargetIP2:
+    Description: Second Mount target IP 2
+    Value: !Ref 'MountTarget2'
+  EFSSG:
+    Description: EFS security group
+    Value: !Ref 'EFSSecurityGroup'
+  EFSId:
+    Description: The EFS id
+    Value: !Ref 'FileSystem'

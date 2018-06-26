@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation Template for deploying an ALB for Boomi Autoscaling group
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Network Configuration
+        Parameters:
+          - VPC
+          - ALBSubnets
+      - Label:
+          default: Security Configuration
+        Parameters:
+          - ALBCertificateArn
+          - HTTPAndHTTPS
+Parameters:
+  VPC:
+    Type: AWS::EC2::VPC::Id
+    Description: The Id of the VPC where the ALB should be deployed to.
+  ALBSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: List of public subnet IDs where the ALB should be created in.
+  ALBCertificateArn:
+    Type: String
+    Description: Optional ARN of the SSL/TLS certificate to associate with the ALB
+  HTTPAndHTTPS:
+    Type: String
+    Description: (Conditional, if ALB Certificate ARN is specified) Opens the ALB for HTTP traffic, too
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+Conditions:
+  HasNoALBCertificateArn: !Equals
+    - !Ref 'ALBCertificateArn'
+    - ''
+  HasALBCertificateArn: !Not
+    - !Condition 'HasNoALBCertificateArn'
+  EnableHTTPListener: !Or
+    - !Condition 'HasNoALBCertificateArn'
+    - !Equals
+      - !Ref 'HTTPAndHTTPS'
+      - 'true'
+Resources:
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Subnets: !Ref 'ALBSubnets'
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '30'
+      Type: application
+      SecurityGroups:
+        - !If
+          - HasALBCertificateArn
+          - !Ref 'ALBHTTPSSecurityGroup'
+          - !Ref 'AWS::NoValue'
+        - !If
+          - EnableHTTPListener
+          - !Ref 'ALBHTTPSecurityGroup'
+          - !Ref 'AWS::NoValue'
+  ALBHTTPSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: HasALBCertificateArn
+    Properties:
+      GroupDescription: Boomi internet-facing ALB SG
+      VpcId: !Ref 'VPC'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Public IP Range
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          FromPort: '0'
+          ToPort: '65535'
+          CidrIp: 0.0.0.0/0
+  ALBHTTPSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: EnableHTTPListener
+    Properties:
+      GroupDescription: Boomi internet-facing ALB SG
+      VpcId: !Ref 'VPC'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Public IP Range
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          FromPort: '0'
+          ToPort: '65535'
+          CidrIp: 0.0.0.0/0
+  ALBListenerHTTPS:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasALBCertificateArn
+    Properties:
+      Certificates:
+        - CertificateArn: !Ref 'ALBCertificateArn'
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref 'ALBTargetGroup'
+      LoadBalancerArn: !Ref 'ApplicationLoadBalancer'
+      Port: '443'
+      Protocol: HTTPS
+  ALBListenerHTTP:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: EnableHTTPListener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref 'ALBTargetGroup'
+      LoadBalancerArn: !Ref 'ApplicationLoadBalancer'
+      Port: '80'
+      Protocol: HTTP
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: '200'
+      HealthCheckPath: /_admin/status
+      Port: 9090
+      Protocol: HTTP
+      VpcId: !Ref 'VPC'
+Outputs:
+  LoadBalancerURL:
+    Description: The URL of the ELB.
+    Value: !GetAtt 'ApplicationLoadBalancer.DNSName'
+  ALBTargetGroupArn:
+    Description: The ARN of the (internal) Target Group of the ALB
+    Value: !Ref 'ALBTargetGroup'

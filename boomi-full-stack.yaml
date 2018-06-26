@@ -1,0 +1,173 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation Template for deploying a full Boomi stack (including ASG,
+  ALB, EFS)
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Boomi Application configuration
+        Parameters:
+          - BoomiName
+          - BoomiInstallToken
+          - BoomiType
+      - Label:
+          default: Cloudformation Template URLs
+        Parameters:
+          - EFSTemplate
+          - BoomiASGTemplateURL
+          - ALBTemplateURL
+      - Label:
+          default: Network Configuration
+        Parameters:
+          - VPC
+          - PrivateSubnetIds
+          - ALBSubnets
+      - Label:
+          default: Autoscaling Configuration
+        Parameters:
+          - InstanceType
+          - MinAmountInstances
+          - DesiredAmountInstances
+          - MaxAmountInstances
+      - Label:
+          default: Security Configuration
+        Parameters:
+          - ALBCertificateArn
+          - SubnetFrom
+          - SSHFrom
+          - KeyName
+      - Label:
+          default: Monitoring
+        Parameters:
+          - NewrelicLicenceKey
+          - NewrelicApplicationName
+Parameters:
+  EFSTemplate:
+    Type: String
+    Description: URL to the AWS CloudFormation template to setup EFS
+  BoomiASGTemplateURL:
+    Type: String
+    Description: URL to the AWS CloudFormation template to setup an ASG for Boomi
+      Servers
+  ALBTemplateURL:
+    Type: String
+    Description: URL to the AWS CloudFormation template to setup a Boomi ALB
+  BoomiName:
+    Description: Boomi Cloud Molecule name
+    Type: String
+    AllowedPattern: '[a-zA-Z0-9_]*'
+  BoomiType:
+    Description: Specifies the type of the Boomi installation (Cloud (default) or Molecule)
+    Type: String
+    Default: Cloud
+    AllowedValues: ['Cloud', 'Molecule']
+  BoomiInstallToken:
+    Description: This token is required to setup the Boomi Cloud Molecule and associate
+      it with the corresponding Cloud. Dell Boomi will not be installed without it
+    Type: String
+  VPC:
+    Description: Which VPC would you like to launch the Boomi environment into
+    Type: AWS::EC2::VPC::Id
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: The private subnet id where the Boomi servers and NFS server should
+      be deployed to
+  InstanceType:
+    Default: m4.large
+    Description: Instance type shared by all servers
+    Type: String
+  SubnetFrom:
+    Description: The CIDR range that has access to mount folders from the Boomi server
+    Default: 10.0.0.0/8
+    Type: String
+    MinLength: '5'
+    MaxLength: '18'
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(\/(\d|[1-2]\d|3[0-2]))
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/xx
+  SSHFrom:
+    Description: The CIDR range that has access to SSH to the NFS server
+    Default: 10.0.0.0/8
+    Type: String
+    MinLength: '5'
+    MaxLength: '18'
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(\/(\d|[1-2]\d|3[0-2]))
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/xx
+  KeyName:
+    Description: Key file used to SSH into servers
+    Type: AWS::EC2::KeyPair::KeyName
+  ALBSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: List of public subnet IDs where the ALB should be created.
+  ALBCertificateArn:
+    Type: String
+    Description: Optional ARN of the certifcate to associate with the ALB
+  MinAmountInstances:
+    Description: The minimum amount of EC2 instances
+    Type: Number
+    Default: '2'
+  DesiredAmountInstances:
+    Description: The desired amount of EC2 instances
+    Type: Number
+    Default: '2'
+  MaxAmountInstances:
+    Description: The maximum amount of EC2 instances
+    Type: Number
+    Default: '2'
+  NewrelicLicenceKey:
+    Description: This is the NewRelic licence key (Optional)
+    Type: String
+    Default: ""
+  NewrelicApplicationName:
+    Description: This is the NewRelic Application name (Optional - if not set it is equal to the value for BoomiName )
+    Type: String
+    Default: ""
+
+Resources:
+  EFS:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Ref 'EFSTemplate'
+      Parameters:
+        VPC: !Ref 'VPC'
+        EFSMountpointSubnets: !Join
+          - ','
+          - !Ref 'PrivateSubnetIds'
+  ALBStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - EFS
+    Properties:
+      TemplateURL: !Ref 'ALBTemplateURL'
+      Parameters:
+        VPC: !Ref 'VPC'
+        ALBSubnets: !Join
+          - ','
+          - !Ref 'ALBSubnets'
+        ALBCertificateArn: !Ref 'ALBCertificateArn'
+  BoomiASGStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - EFS
+      - ALBStack
+    Properties:
+      TemplateURL: !Ref 'BoomiASGTemplateURL'
+      Parameters:
+        BoomiName: !Ref 'BoomiName'
+        BoomiInstallToken: !Ref 'BoomiInstallToken'
+        BoomiType: !Ref 'BoomiType'
+        VPC: !Ref 'VPC'
+        MinAmountInstances: !Ref 'MinAmountInstances'
+        DesiredAmountInstances: !Ref 'DesiredAmountInstances'
+        MaxAmountInstances: !Ref 'MaxAmountInstances'
+        BoomiSubnets: !Join
+          - ','
+          - !Ref 'PrivateSubnetIds'
+        BoomiInstanceType: !Ref 'InstanceType'
+        SubnetFrom: !Ref 'SubnetFrom'
+        ALBTargetGroupArn: !GetAtt 'ALBStack.Outputs.ALBTargetGroupArn'
+        EFSSecurityGroup: !GetAtt 'EFS.Outputs.EFSSG'
+        EFSId: !GetAtt 'EFS.Outputs.EFSId'
+        SSHFrom: !Ref 'SSHFrom'
+        SSHKey: !Ref 'KeyName'
+        NewrelicLicenceKey: !Ref 'NewrelicLicenceKey'
+        NewrelicApplicationName: !Ref 'NewrelicApplicationName'
